@@ -1,17 +1,15 @@
 import os
-from tqdm import tqdm
-from collections import defaultdict
 from typing import Tuple, Dict
-import time
+from collections import defaultdict
 
 import numpy as np
 import numpy.typing as npt
 from timspy.dia import TimsPyDIA
 
-from utils.io import create_dir
 from .peak_process import mergePeaks, divideMS2ByWindows
-from utils.transform import transform_time
-from read_raw.multi_process import multi_process_mzml_tims
+from .concurrency import multi_process_mzml_tims
+from utils.transform import cal_time
+from utils.io import create_dir
 
 def extractMs2(path: str):
     """
@@ -70,7 +68,6 @@ def extractMs2(path: str):
 
 def processPeaks(
     massSpectrums: npt.NDArray,
-    file: str,
     tol: int
     ):
     """
@@ -88,6 +85,15 @@ def processPeaks(
         massSpectrums, windows)  # type: ignore
     return dividedMs2
 
+def excep_func(e, *args):
+    file_path = args[0]
+    root_path = args[1]
+    error_dir = os.path.join(root_path, "error_data_seq")
+    data_name = str(os.path.split(file_path)[-1]).split('.d')[0]
+    print(f"{data_name} 文件处理时出现错误: {e}")
+    create_dir(error_dir)
+    create_dir(os.path.join(error_dir, data_name))
+
 def read_tims_data(filePath: str, rootPath: str, tol: int):
     """
         读取 tims 数据
@@ -100,93 +106,49 @@ def read_tims_data(filePath: str, rootPath: str, tol: int):
         -   root_path: 保存提取后的数据根目录
         -   
     """
-    print("start extractint MassSpectrums!")
-    merge_path = os.path.join(rootPath, "merge")
-    extract_path = os.path.join(rootPath, "extractMs2")
-    create_dir(merge_path)
-    create_dir(extract_path)
     _, file_name = os.path.split(filePath)
-    if file_name.replace('.d', '.npy') in os.listdir(merge_path):
-        print(f'the file {file_name} has been processed!')
-        return
-    start = time.time()
-    massSpectrums = extractMs2(filePath)
-    fileName = file_name.split('.')[0]
-    savePath = os.path.join(extract_path, f"{fileName}.npy")
-    # np.save(savePath, massSpectrums)
-    print("end!")
 
-    peaksNumSatifyMassSpectrums = []
-    for massSpectrum in massSpectrums:
-        if len(massSpectrum[0]) >= 6:
-            peaksNumSatifyMassSpectrums.append(massSpectrum)
-    peaksNumSatifyMassSpectrums = np.array(
-        peaksNumSatifyMassSpectrums, dtype=object)
+    @cal_time(f"{file_name} 文件处理完毕")
+    def excute():
+        print("start extractint MassSpectrums!")
+        merge_path = os.path.join(rootPath, "merge")
+        extract_path = os.path.join(rootPath, "extractMs2")
+        create_dir(merge_path)
+        create_dir(extract_path)
+        
+        if file_name.replace('.d', '.npy') in os.listdir(merge_path):
+            print(f'the file {file_name} has been processed!')
+            return
+        massSpectrums = extractMs2(filePath)
+        save_name = file_name.replace('.d', '.npy')
+        savePath = os.path.join(extract_path, save_name)
+        # np.save(savePath, massSpectrums)
+        print("end!")
 
-    print("start merging Peaks!")
-    afterMergedMs2 = processPeaks(
-        peaksNumSatifyMassSpectrums, fileName, tol)
-    savePath = os.path.join(merge_path, f"{fileName}.npy")
-    np.save(savePath, afterMergedMs2)  # type: ignore
-    print("end!")
-    end = time.time()
-    print('-'*120)
-    hour, minute, second = transform_time(end - start)
-    print('{} 文件处理完毕，耗时 {:.1f} h {:.1f} m {:.1f}'.format(fileName, hour, minute, second))
-    print('-'*120)
-    del massSpectrums
-    del peaksNumSatifyMassSpectrums
-    del afterMergedMs2
+        peaksNumSatifyMassSpectrums = []
+        for massSpectrum in massSpectrums:
+            if len(massSpectrum[0]) >= 6:
+                peaksNumSatifyMassSpectrums.append(massSpectrum)
+        peaksNumSatifyMassSpectrums = np.array(
+            peaksNumSatifyMassSpectrums, dtype=object)
+
+        print("start merging Peaks!")
+        afterMergedMs2 = processPeaks(
+            peaksNumSatifyMassSpectrums, tol)
+        savePath = os.path.join(merge_path, save_name)
+        np.save(savePath, afterMergedMs2)  # type: ignore
+        print("end!")
+        del massSpectrums
+        del peaksNumSatifyMassSpectrums
+        del afterMergedMs2
+    excute()
 
 def main(root_path: str, num_processes: int = 20, tol: int = 15):
-    start = time.time()
     multi_process_mzml_tims(
         num_processes=num_processes,
         root_path=root_path,
         extension_class='.d',
         tol=tol,
-        func=read_tims_data
+        task_func=read_tims_data,
+        excep_func=excep_func
     )
-    end = time.time()
-    hour, minute, second = transform_time(end - start)
-    print('-'*120)
-    print('所有文件处理完毕，耗时 {:.1f}h {:.1f}m {:.1f}s'.format(hour, minute, second))
-    print('-'*120)
-
-if __name__ == "__main__":
-    start = time.time()
-    for root_path in [
-        '/data/xp/data/1. T2D-CAD-RJ',
-        '/data/xp/data/2. MeS_YN',
-        '/data/xp/data/3. brain cohort-JW'
-    ]:
-        main(root_path, 15, 15)
-    end = time.time()
-    hour, minute, second = transform_time(end - start)
-    print('所有数据处理完毕，耗时 {:.1f}h {:.1f}m {:.1f}s'.format(hour, minute, second))
-    # import os
-    # tol = 15
-    # rootPath = "./"
-    # filePaths = [rootPath +
-    #              file for file in os.listdir(rootPath) if file.endswith('.d')]
-    # for filePath in filePaths:
-    #     print("start extractint MassSpectrums!")
-    #     massSpectrums = extractMs2(filePath)
-    #     fileName = filePath.split('/')[-1].split('.')[0]
-    #     savePath = os.path.join(rootPath, "extractMs2", "{fileName}.npy")
-    #     np.save(savePath, massSpectrums)
-    #     print("end!")
-
-    #     peaksNumSatifyMassSpectrums = []
-    #     for massSpectrum in massSpectrums:
-    #         if len(massSpectrum[0]) >= 6:
-    #             peaksNumSatifyMassSpectrums.append(massSpectrum)
-    #     peaksNumSatifyMassSpectrums = np.array(
-    #         peaksNumSatifyMassSpectrums, dtype=object)
-
-    #     print("start merging Peaks!")
-    #     afterMergedMs2 = processPeaks(
-    #         peaksNumSatifyMassSpectrums, fileName, tol)
-    #     savePath = os.path.join(rootPath, "merge", "{fileName}.npy")
-    #     np.save(savePath, afterMergedMs2)  # type: ignore
-    #     print("end!")

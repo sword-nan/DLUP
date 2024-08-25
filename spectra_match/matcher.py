@@ -65,8 +65,8 @@ class FilterSimilarityFunction:
     @staticmethod
     def MAE_peaksum(A: npt.NDArray, B: npt.NDArray):
         peaksum_score = FilterSimilarityFunction.peaksum(A, B)
-        penalty_MAE_score = FilterSimilarityFunction.MAE(A, B)
-        return peaksum_score + penalty_MAE_score
+        MAE_score = FilterSimilarityFunction.MAE(A, B)
+        return peaksum_score + MAE_score
 
     @staticmethod
     def penalty_MAE_peaksum(A: npt.NDArray, B: npt.NDArray):

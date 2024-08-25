@@ -1,14 +1,13 @@
 import os
-import time
-
 import numpy as np
 import numpy.typing as npt
 from tqdm import tqdm
 from pymzml.run import Reader
 
-from .multi_process import multi_process_mzml_tims
+from .concurrency import multi_process_mzml_tims
 from .peak_process import mergePeaks, divideMS2ByWindows
-from utils.transform import transform_time
+from utils.io import create_dir
+from utils.transform import cal_time
 
 def loadMS2(path: str) -> npt.NDArray:
     """
@@ -40,52 +39,40 @@ def loadMS2(path: str) -> npt.NDArray:
     ]
     return np.array(MS2, dtype=object)
 
+def excep_func(e, *args):
+    file_path = args[0]
+    root_path = args[1]
+    error_dir = os.path.join(root_path, "error_data_seq")
+    data_name = str(os.path.split(file_path)[-1]).split('.mzML')[0]
+    print(f"{data_name} 文件处理时出现错误: {e}")
+    create_dir(error_dir)
+    create_dir(os.path.join(error_dir, data_name))
+
 def readMzmlData(path: str, root_path: str, tol: int):
-    start = time.time()
-    save_path = os.path.join(root_path, 'merge')
-    MS2 = loadMS2(path)
-    for i in range(len(MS2)):
-        MS2[i][0] = mergePeaks(MS2[i][0], tol)
-    windows = np.array(list(set(MS2[:, 1])))
-    windows = windows[np.argsort(windows[:, 0])]
-    windows = [tuple(window) for window in windows]
-    dividedMS2 = divideMS2ByWindows(MS2, windows)  # type: ignore
     _, file_name = os.path.split(path)
-    save_name = file_name.replace('.mzML', '.npy')
-    if not os.path.exists(save_path):
-        os.mkdir(save_path)
-    np.save(os.path.join(save_path, save_name), dividedMS2)  # type: ignore
-    end = time.time()
-    print('-'*120)
-    hour, minute, second = transform_time(end - start)
-    print('{} 文件处理完毕，耗时 {:.1f}h {:.1f}m {:.1f}s'.format(file_name, hour, minute, second))
-    print('-'*120)
+
+    @cal_time(f"{file_name} 文件处理完毕")
+    def excute():
+        save_path = os.path.join(root_path, 'merge')
+        MS2 = loadMS2(path)
+        for i in range(len(MS2)):
+            MS2[i][0] = mergePeaks(MS2[i][0], tol)
+        windows = np.array(list(set(MS2[:, 1])))
+        windows = windows[np.argsort(windows[:, 0])]
+        windows = [tuple(window) for window in windows]
+        dividedMS2 = divideMS2ByWindows(MS2, windows)  # type: ignore
+        save_name = file_name.replace('.mzML', '.npy')
+        if not os.path.exists(save_path):
+            os.mkdir(save_path)
+        np.save(os.path.join(save_path, save_name), dividedMS2)  # type: ignore
+    excute()
 
 def main(root_path: str, num_processes: int = 20, tol: int = 15):
-    start = time.time()
     multi_process_mzml_tims(
         num_processes=num_processes,
         root_path=root_path,
         extension_class='.mzML',
         tol=tol,
-        func=readMzmlData
+        task_func=readMzmlData,
+        excep_func=excep_func
     )
-    end = time.time()
-    hour, minute, second = transform_time(end - start)
-    print('-'*120)
-    print('所有文件处理完毕，耗时 {:.1f}h {:.1f}m {:.1f}s'.format(hour, minute, second))
-    print('-'*120)
-
-if __name__ == "__main__":
-
-    start = time.time()
-    for root_path in [
-        '/data/xp/data/astral_20231016_300ngPlasmaSample',
-        '/data/xp/data/lfq32',
-        '/data/xp/data/NoRT_LFQ',
-        '/data/xp/data/Hela'
-    ]:
-        main(root_path, 15, 15)
-    end = time.time()
-    hour, minute, second = transform_time(end - start)
-    print('所有数据处理完毕，耗时 {:.1f}h {:.1f}m {:.1f}s'.format(hour, minute, second))
